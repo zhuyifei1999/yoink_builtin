@@ -39,23 +39,23 @@ struct type_slot {
 };
 
 #define generic_yoinked(ptr) (_Generic((ptr), \
-        int (*)(): yoinked_int,          \
-        long (*)(): yoinked_int,          \
-        PyObject *(*)(): yoinked_pyobject    \
+        int (*)(): yoinked_int,               \
+        long (*)(): yoinked_int,              \
+        PyObject *(*)(): yoinked_pyobject     \
     ))
 
-#define SLOT1(name) {                                  \
-        #name,                                         \
-        offsetof(PyTypeObject, name),                  \
-        false,                                         \
-        0,                                             \
+#define SLOT1(name) {                                 \
+        #name,                                        \
+        offsetof(PyTypeObject, name),                 \
+        false,                                        \
+        0,                                            \
         generic_yoinked(((PyTypeObject *)NULL)->name) \
     }
 #define SLOT2(indir, name) {#name,                              \
         offsetof(PyTypeObject, indir),                          \
         true,                                                   \
         offsetof(typeof(*((PyTypeObject *)NULL)->indir), name), \
-        generic_yoinked(((PyTypeObject *)NULL)->indir->name)  \
+        generic_yoinked(((PyTypeObject *)NULL)->indir->name)    \
     }
 
 static struct type_slot type_slots[] = {
