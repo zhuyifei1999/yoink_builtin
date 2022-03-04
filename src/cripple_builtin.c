@@ -3,15 +3,49 @@
 #include <stddef.h>
 #include <Python.h>
 
+static PyObject *
+crippled_pyobject()
+{
+    PyErr_SetString(PyExc_NotImplementedError,
+                    "function has been crippled");
+    return NULL;
+}
+
+static int
+crippled_int()
+{
+    PyErr_SetString(PyExc_NotImplementedError,
+                    "function has been crippled");
+    return -1;
+}
+
 struct type_slot {
     const char *name;
     uintptr_t offset1;
     bool should_offset2;
     uintptr_t offset2;
+    void *crippled_func;
 };
 
-#define SLOT1(name) {#name, offsetof(PyTypeObject, name), false, 0}
-#define SLOT2(indir, name) {#name, offsetof(PyTypeObject, indir), true, offsetof(typeof(*((PyTypeObject *)NULL)->indir), name)}
+#define generic_crippled(ptr) (_Generic((ptr), \
+        int (*)(): crippled_int,          \
+        long (*)(): crippled_int,          \
+        PyObject *(*)(): crippled_pyobject    \
+    ))
+
+#define SLOT1(name) {                                  \
+        #name,                                         \
+        offsetof(PyTypeObject, name),                  \
+        false,                                         \
+        0,                                             \
+        generic_crippled(((PyTypeObject *)NULL)->name) \
+    }
+#define SLOT2(indir, name) {#name,                              \
+        offsetof(PyTypeObject, indir),                          \
+        true,                                                   \
+        offsetof(typeof(*((PyTypeObject *)NULL)->indir), name), \
+        generic_crippled(((PyTypeObject *)NULL)->indir->name)  \
+    }
 
 static struct type_slot type_slots[] = {
     SLOT1(tp_getattr),
@@ -94,16 +128,8 @@ static struct type_slot type_slots[] = {
 #endif
 
     SLOT2(tp_as_buffer, bf_getbuffer),
-    SLOT2(tp_as_buffer, bf_releasebuffer),
+    // SLOT2(tp_as_buffer, bf_releasebuffer),
 };
-
-static PyObject *
-crippled()
-{
-    PyErr_SetString(PyExc_NotImplementedError,
-                    "function has been crippled");
-    return NULL;
-}
 
 static PyObject *
 cripple_function(PyObject *self, PyObject *args)
@@ -113,7 +139,7 @@ cripple_function(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O!", &PyCFunction_Type, &func))
         return NULL;
 
-    PyCFunction_GET_FUNCTION(func) = (PyCFunction)crippled;
+    PyCFunction_GET_FUNCTION(func) = (PyCFunction)crippled_pyobject;
 
     Py_RETURN_NONE;
 }
@@ -133,7 +159,7 @@ cripple_type_slot(PyObject *self, PyObject *args)
             if (slot->should_offset2)
                 ptr = *ptr + slot->offset2;
 
-            *ptr = crippled;
+            *ptr = slot->crippled_func;
             Py_RETURN_NONE;
         }
     }
