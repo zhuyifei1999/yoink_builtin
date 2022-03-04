@@ -1,5 +1,5 @@
 from setuptools import setup, Extension
 
-cripple_builtin = Extension('cripple_builtin', ['src/cripple_builtin.c'])
+yoink_builtin = Extension('yoink_builtin', ['src/yoink_builtin.c'])
 
-setup(name='cripple_builtin', ext_modules=[cripple_builtin])
+setup(name='yoink_builtin', ext_modules=[yoink_builtin])

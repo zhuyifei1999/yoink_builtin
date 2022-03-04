@@ -3,30 +3,30 @@
 #include <stddef.h>
 #include <Python.h>
 
-static PyThread_type_lock cripple_lock;
+static PyThread_type_lock yoink_lock;
 
 static PyThread_type_lock lockdown_lock;
 static PyFrameObject *lockdown_frame;
 
-struct crippled_info {
+struct yoinked_info {
     void **addr;
     void *orig_func;
     void *new_func;
 };
 
 static PyObject *
-crippled_pyobject()
+yoinked_pyobject()
 {
     PyErr_SetString(PyExc_NotImplementedError,
-                    "function has been crippled");
+                    "function has been yoinked");
     return NULL;
 }
 
 static int
-crippled_int()
+yoinked_int()
 {
     PyErr_SetString(PyExc_NotImplementedError,
-                    "function has been crippled");
+                    "function has been yoinked");
     return -1;
 }
 
@@ -35,13 +35,13 @@ struct type_slot {
     uintptr_t offset1;
     bool should_offset2;
     uintptr_t offset2;
-    void *crippled_func;
+    void *yoinked_func;
 };
 
-#define generic_crippled(ptr) (_Generic((ptr), \
-        int (*)(): crippled_int,          \
-        long (*)(): crippled_int,          \
-        PyObject *(*)(): crippled_pyobject    \
+#define generic_yoinked(ptr) (_Generic((ptr), \
+        int (*)(): yoinked_int,          \
+        long (*)(): yoinked_int,          \
+        PyObject *(*)(): yoinked_pyobject    \
     ))
 
 #define SLOT1(name) {                                  \
@@ -49,13 +49,13 @@ struct type_slot {
         offsetof(PyTypeObject, name),                  \
         false,                                         \
         0,                                             \
-        generic_crippled(((PyTypeObject *)NULL)->name) \
+        generic_yoinked(((PyTypeObject *)NULL)->name) \
     }
 #define SLOT2(indir, name) {#name,                              \
         offsetof(PyTypeObject, indir),                          \
         true,                                                   \
         offsetof(typeof(*((PyTypeObject *)NULL)->indir), name), \
-        generic_crippled(((PyTypeObject *)NULL)->indir->name)  \
+        generic_yoinked(((PyTypeObject *)NULL)->indir->name)  \
     }
 
 static struct type_slot type_slots[] = {
@@ -145,15 +145,15 @@ static struct type_slot type_slots[] = {
 static void
 info_destruct(PyObject *capsule)
 {
-    struct crippled_info *info = PyCapsule_GetPointer(capsule,
-        "crippled_builtin.uncripple_info");
+    struct yoinked_info *info = PyCapsule_GetPointer(capsule,
+        "yoinked_builtin.unyoink_info");
     PyMem_RawFree(info);
 }
 
 static PyObject *
-do_cripple(void **addr, void *new_func)
+do_yoink(void **addr, void *new_func)
 {
-    struct crippled_info *info;
+    struct yoinked_info *info;
     PyObject *capsule;
 
     PyThread_acquire_lock(lockdown_lock, 1);
@@ -168,36 +168,36 @@ do_cripple(void **addr, void *new_func)
     if (!info)
         return PyErr_NoMemory();
 
-    capsule = PyCapsule_New(info, "crippled_builtin.uncripple_info", info_destruct);
+    capsule = PyCapsule_New(info, "yoinked_builtin.unyoink_info", info_destruct);
     if (!capsule) {
         PyMem_RawFree(info);
         return NULL;
     }
 
-    PyThread_acquire_lock(cripple_lock, 1);
+    PyThread_acquire_lock(yoink_lock, 1);
     info->addr = addr;
     info->orig_func = *addr;
     info->new_func = new_func;
 
     *addr = new_func;
-    PyThread_release_lock(cripple_lock);
+    PyThread_release_lock(yoink_lock);
 
     return capsule;
 }
 
 static PyObject *
-cripple_function(PyObject *self, PyObject *args)
+yoink_function(PyObject *self, PyObject *args)
 {
     PyObject *func, *ret;
 
     if (!PyArg_ParseTuple(args, "O!", &PyCFunction_Type, &func))
         return NULL;
 
-    return do_cripple((void **)&PyCFunction_GET_FUNCTION(func), crippled_pyobject);
+    return do_yoink((void **)&PyCFunction_GET_FUNCTION(func), yoinked_pyobject);
 }
 
 static PyObject *
-cripple_type_slot(PyObject *self, PyObject *args)
+yoink_type_slot(PyObject *self, PyObject *args)
 {
     PyObject *type, *ret;
     const char *name;
@@ -211,7 +211,7 @@ cripple_type_slot(PyObject *self, PyObject *args)
             if (slot->should_offset2)
                 ptr = *ptr + slot->offset2;
 
-            return do_cripple(ptr, slot->crippled_func);
+            return do_yoink(ptr, slot->yoinked_func);
         }
     }
 
@@ -220,7 +220,7 @@ cripple_type_slot(PyObject *self, PyObject *args)
 }
 
 static PyObject *
-uncripple(PyObject *self, PyObject *args)
+unyoink(PyObject *self, PyObject *args)
 {
     PyObject *capsule;
     bool correct;
@@ -236,15 +236,15 @@ uncripple(PyObject *self, PyObject *args)
     }
     PyThread_release_lock(lockdown_lock);
 
-    struct crippled_info *info = PyCapsule_GetPointer(capsule,
-        "crippled_builtin.uncripple_info");
+    struct yoinked_info *info = PyCapsule_GetPointer(capsule,
+        "yoinked_builtin.unyoink_info");
     if (!info)
         return NULL;
 
-    PyThread_acquire_lock(cripple_lock, 1);
+    PyThread_acquire_lock(yoink_lock, 1);
     if ((correct = *info->addr == info->new_func))
         *info->addr = info->orig_func;
-    PyThread_release_lock(cripple_lock);
+    PyThread_release_lock(yoink_lock);
 
     if (!correct) {
         PyErr_SetString(PyExc_AssertionError, "function pointer was modified?!");
@@ -294,30 +294,30 @@ unlockdown(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-static PyMethodDef cripple_builtin_methods[] = {
-    {"cripple_function", cripple_function, METH_VARARGS, ""},
-    {"cripple_type_slot", cripple_type_slot, METH_VARARGS, ""},
+static PyMethodDef yoink_builtin_methods[] = {
+    {"yoink_function", yoink_function, METH_VARARGS, ""},
+    {"yoink_type_slot", yoink_type_slot, METH_VARARGS, ""},
 
-    {"uncripple", uncripple, METH_VARARGS, ""},
+    {"unyoink", unyoink, METH_VARARGS, ""},
 
     {"lockdown", lockdown, METH_NOARGS, ""},
     {"unlockdown", unlockdown, METH_NOARGS, ""},
     {NULL, NULL, 0, NULL}
 };
 
-static struct PyModuleDef cripple_builtin_module = {
+static struct PyModuleDef yoink_builtin_module = {
     PyModuleDef_HEAD_INIT,
-    "cripple_builtin",
+    "yoink_builtin",
     "",
     -1,
-    cripple_builtin_methods
+    yoink_builtin_methods
 };
 
 PyMODINIT_FUNC
-PyInit_cripple_builtin(void)
+PyInit_yoink_builtin(void)
 {
-    cripple_lock = PyThread_allocate_lock();
-    if (!cripple_lock) {
+    yoink_lock = PyThread_allocate_lock();
+    if (!yoink_lock) {
         PyErr_SetString(PyExc_RuntimeError, "lock creation failed");
         return NULL;
     }
@@ -328,5 +328,5 @@ PyInit_cripple_builtin(void)
         return NULL;
     }
 
-    return PyModule_Create(&cripple_builtin_module);
+    return PyModule_Create(&yoink_builtin_module);
 }
