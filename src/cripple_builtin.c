@@ -3,6 +3,14 @@
 #include <stddef.h>
 #include <Python.h>
 
+PyThread_type_lock cripple_lock;
+
+struct crippled_info {
+    void **addr;
+    void *orig_func;
+    void *new_func;
+};
+
 static PyObject *
 crippled_pyobject()
 {
@@ -131,23 +139,56 @@ static struct type_slot type_slots[] = {
     // SLOT2(tp_as_buffer, bf_releasebuffer),
 };
 
+static void
+info_destruct(PyObject *capsule)
+{
+    struct crippled_info *info = PyCapsule_GetPointer(capsule,
+        "crippled_builtin.uncripple_info");
+    PyMem_RawFree(info);
+}
+
+static PyObject *
+do_cripple(void **addr, void *new_func)
+{
+    struct crippled_info *info;
+    PyObject *capsule;
+
+    info = PyMem_RawMalloc(sizeof(*info));
+    if (!info)
+        return PyErr_NoMemory();
+
+    capsule = PyCapsule_New(info, "crippled_builtin.uncripple_info", info_destruct);
+    if (!capsule) {
+        PyMem_RawFree(info);
+        return NULL;
+    }
+
+    PyThread_acquire_lock(cripple_lock, 1);
+    info->addr = addr;
+    info->orig_func = *addr;
+    info->new_func = new_func;
+
+    *addr = new_func;
+    PyThread_release_lock(cripple_lock);
+
+    return capsule;
+}
+
 static PyObject *
 cripple_function(PyObject *self, PyObject *args)
 {
-    PyObject *func;
+    PyObject *func, *ret;
 
     if (!PyArg_ParseTuple(args, "O!", &PyCFunction_Type, &func))
         return NULL;
 
-    PyCFunction_GET_FUNCTION(func) = (PyCFunction)crippled_pyobject;
-
-    Py_RETURN_NONE;
+    return do_cripple((void **)&PyCFunction_GET_FUNCTION(func), crippled_pyobject);
 }
 
 static PyObject *
 cripple_type_slot(PyObject *self, PyObject *args)
 {
-    PyObject *type;
+    PyObject *type, *ret;
     const char *name;
 
     if (!PyArg_ParseTuple(args, "O!s", &PyType_Type, &type, &name))
@@ -159,8 +200,7 @@ cripple_type_slot(PyObject *self, PyObject *args)
             if (slot->should_offset2)
                 ptr = *ptr + slot->offset2;
 
-            *ptr = slot->crippled_func;
-            Py_RETURN_NONE;
+            return do_cripple(ptr, slot->crippled_func);
         }
     }
 
@@ -168,9 +208,38 @@ cripple_type_slot(PyObject *self, PyObject *args)
     return NULL;
 }
 
+static PyObject *
+uncripple(PyObject *self, PyObject *args)
+{
+    PyObject *capsule;
+    bool correct;
+
+    if (!PyArg_ParseTuple(args, "O!", &PyCapsule_Type, &capsule))
+        return NULL;
+
+    struct crippled_info *info = PyCapsule_GetPointer(capsule,
+        "crippled_builtin.uncripple_info");
+    if (!info)
+        return NULL;
+
+    PyThread_acquire_lock(cripple_lock, 1);
+    if ((correct = *info->addr == info->new_func))
+        *info->addr = info->orig_func;
+    PyThread_release_lock(cripple_lock);
+
+    if (!correct) {
+        PyErr_SetString(PyExc_AssertionError, "function pointer was modified?!");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef cripple_builtin_methods[] = {
     {"cripple_function", cripple_function, METH_VARARGS, ""},
     {"cripple_type_slot", cripple_type_slot, METH_VARARGS, ""},
+
+    {"uncripple", uncripple, METH_VARARGS, ""},
     {NULL, NULL, 0, NULL}
 };
 
@@ -185,5 +254,11 @@ static struct PyModuleDef cripple_builtin_module = {
 PyMODINIT_FUNC
 PyInit_cripple_builtin(void)
 {
+    cripple_lock = PyThread_allocate_lock();
+    if (!cripple_lock) {
+        PyErr_SetString(PyExc_RuntimeError, "lock creation failed");
+        return NULL;
+    }
+
     return PyModule_Create(&cripple_builtin_module);
 }
