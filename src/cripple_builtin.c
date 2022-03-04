@@ -3,7 +3,10 @@
 #include <stddef.h>
 #include <Python.h>
 
-PyThread_type_lock cripple_lock;
+static PyThread_type_lock cripple_lock;
+
+static PyThread_type_lock lockdown_lock;
+static PyFrameObject *lockdown_frame;
 
 struct crippled_info {
     void **addr;
@@ -153,6 +156,14 @@ do_cripple(void **addr, void *new_func)
     struct crippled_info *info;
     PyObject *capsule;
 
+    PyThread_acquire_lock(lockdown_lock, 1);
+    if (lockdown_frame) {
+        PyThread_release_lock(lockdown_lock);
+        PyErr_SetString(PyExc_RuntimeError, "lockdown");
+        return NULL;
+    }
+    PyThread_release_lock(lockdown_lock);
+
     info = PyMem_RawMalloc(sizeof(*info));
     if (!info)
         return PyErr_NoMemory();
@@ -217,6 +228,14 @@ uncripple(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O!", &PyCapsule_Type, &capsule))
         return NULL;
 
+    PyThread_acquire_lock(lockdown_lock, 1);
+    if (lockdown_frame) {
+        PyThread_release_lock(lockdown_lock);
+        PyErr_SetString(PyExc_RuntimeError, "lockdown");
+        return NULL;
+    }
+    PyThread_release_lock(lockdown_lock);
+
     struct crippled_info *info = PyCapsule_GetPointer(capsule,
         "crippled_builtin.uncripple_info");
     if (!info)
@@ -235,11 +254,54 @@ uncripple(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *
+lockdown(PyObject *self, PyObject *args)
+{
+    PyThread_acquire_lock(lockdown_lock, 1);
+    if (lockdown_frame) {
+        PyThread_release_lock(lockdown_lock);
+        PyErr_SetString(PyExc_RuntimeError, "lockdown");
+        return NULL;
+    }
+
+    lockdown_frame = PyEval_GetFrame();
+    Py_XINCREF(lockdown_frame);
+    PyThread_release_lock(lockdown_lock);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+unlockdown(PyObject *self, PyObject *args)
+{
+    PyThread_acquire_lock(lockdown_lock, 1);
+    if (!lockdown_frame) {
+        PyThread_release_lock(lockdown_lock);
+        PyErr_SetString(PyExc_RuntimeError, "no lockdown");
+        return NULL;
+    }
+
+    if (lockdown_frame != PyEval_GetFrame()) {
+        PyThread_release_lock(lockdown_lock);
+        PyErr_SetString(PyExc_RuntimeError, "bad frame; call unlockdown from same frame as lockdown");
+        return NULL;
+    }
+
+    Py_XDECREF(lockdown_frame);
+    lockdown_frame = NULL;
+    PyThread_release_lock(lockdown_lock);
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef cripple_builtin_methods[] = {
     {"cripple_function", cripple_function, METH_VARARGS, ""},
     {"cripple_type_slot", cripple_type_slot, METH_VARARGS, ""},
 
     {"uncripple", uncripple, METH_VARARGS, ""},
+
+    {"lockdown", lockdown, METH_NOARGS, ""},
+    {"unlockdown", unlockdown, METH_NOARGS, ""},
     {NULL, NULL, 0, NULL}
 };
 
@@ -256,6 +318,12 @@ PyInit_cripple_builtin(void)
 {
     cripple_lock = PyThread_allocate_lock();
     if (!cripple_lock) {
+        PyErr_SetString(PyExc_RuntimeError, "lock creation failed");
+        return NULL;
+    }
+
+    lockdown_lock = PyThread_allocate_lock();
+    if (!lockdown_lock) {
         PyErr_SetString(PyExc_RuntimeError, "lock creation failed");
         return NULL;
     }
