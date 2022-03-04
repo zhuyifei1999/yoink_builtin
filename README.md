@@ -20,7 +20,8 @@ import yoink_builtin
 import traceback
 
 foo = yoink_builtin.yoink_type_slot(int, 'nb_power')
-# Or alternatively,
+# Or alternatively, as an example, yoinking a builtin function,
+# but ** operator is still callable):
 # foo = yoink_builtin.yoink_function(pow)
 
 yoink_builtin.lockdown()
@@ -60,19 +61,19 @@ Should show something similar to:
 ```
 Because of yoink, you can't use this:
 Traceback (most recent call last):
-  File "test.py", line 14, in unsafe_code
+  File "test.py", line 15, in unsafe_code
     print(pow(1, 1))
 NotImplementedError: function has been yoinked
 
 Because of lockdown, you can't unyoink:
 Traceback (most recent call last):
-  File "test.py", line 20, in unsafe_code
+  File "test.py", line 21, in unsafe_code
     yoink_builtin.unyoink(foo)
 RuntimeError: lockdown
 
 And you can't even unlockdown:
 Traceback (most recent call last):
-  File "test.py", line 26, in unsafe_code
+  File "test.py", line 27, in unsafe_code
     yoink_builtin.unlockdown()
 RuntimeError: bad frame; call unlockdown from same frame as lockdown
 
