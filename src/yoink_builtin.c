@@ -10,8 +10,8 @@ static PyFrameObject *lockdown_frame;
 
 struct yoinked_info {
     void **addr;
-    void *orig_func;
-    void *new_func;
+    void *orig_val;
+    void *new_val;
 };
 
 static PyObject *
@@ -142,6 +142,12 @@ static struct type_slot type_slots[] = {
     // SLOT2(tp_as_buffer, bf_releasebuffer),
 };
 
+struct wrapperbase yoinked_wrapper = {
+    .name = "yoinked_wrapper",
+    .wrapper = (void *)yoinked_pyobject,
+    .doc = "",
+};
+
 static void
 info_destruct(PyObject *capsule)
 {
@@ -151,7 +157,7 @@ info_destruct(PyObject *capsule)
 }
 
 static PyObject *
-do_yoink(void **addr, void *new_func)
+do_yoink(void **addr, void *new_val)
 {
     struct yoinked_info *info;
     PyObject *capsule;
@@ -176,24 +182,30 @@ do_yoink(void **addr, void *new_func)
 
     PyThread_acquire_lock(yoink_lock, 1);
     info->addr = addr;
-    info->orig_func = *addr;
-    info->new_func = new_func;
+    info->orig_val = *addr;
+    info->new_val = new_val;
 
-    *addr = new_func;
+    *addr = new_val;
     PyThread_release_lock(yoink_lock);
 
     return capsule;
 }
 
 static PyObject *
-yoink_function(PyObject *self, PyObject *args)
+yoink_function(PyObject *self, PyObject *arg)
 {
     PyObject *func, *ret;
 
-    if (!PyArg_ParseTuple(args, "O!", &PyCFunction_Type, &func))
-        return NULL;
-
-    return do_yoink((void **)&PyCFunction_GET_FUNCTION(func), yoinked_pyobject);
+    if (Py_TYPE(arg) == &PyCFunction_Type)
+        return do_yoink((void **)&PyCFunction_GET_FUNCTION(arg), yoinked_pyobject);
+    else if (Py_TYPE(arg) == &PyMethodDescr_Type)
+        return do_yoink((void **)&((PyMethodDescrObject *)arg)->d_method->ml_meth, yoinked_pyobject);
+    else if (Py_TYPE(arg) == &PyWrapperDescr_Type)
+        return do_yoink((void **)&((PyWrapperDescrObject *)arg)->d_base, &yoinked_wrapper);
+    // else if (Py_TYPE(arg) == &PyGetSetDescr_Type) TODO
+    // else if (Py_TYPE(arg) == &PyMemberDescr_Type) TODO
+    else
+        return PyErr_Format(PyExc_NotImplementedError, "%R not supported", Py_TYPE(arg));
 }
 
 static PyObject *
@@ -242,8 +254,8 @@ unyoink(PyObject *self, PyObject *args)
         return NULL;
 
     PyThread_acquire_lock(yoink_lock, 1);
-    if ((correct = *info->addr == info->new_func))
-        *info->addr = info->orig_func;
+    if ((correct = *info->addr == info->new_val))
+        *info->addr = info->orig_val;
     PyThread_release_lock(yoink_lock);
 
     if (!correct) {
@@ -295,7 +307,7 @@ unlockdown(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef yoink_builtin_methods[] = {
-    {"yoink_function", yoink_function, METH_VARARGS, ""},
+    {"yoink_function", yoink_function, METH_O, ""},
     {"yoink_type_slot", yoink_type_slot, METH_VARARGS, ""},
 
     {"unyoink", unyoink, METH_VARARGS, ""},
