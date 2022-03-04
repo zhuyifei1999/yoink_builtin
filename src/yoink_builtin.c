@@ -283,12 +283,12 @@ unlockdown(PyObject *self, PyObject *args)
 
     if (lockdown_frame != PyEval_GetFrame()) {
         PyThread_release_lock(lockdown_lock);
-        PyErr_SetString(PyExc_RuntimeError, "bad frame; call unlockdown from same frame as lockdown");
+        PyErr_SetString(PyExc_RuntimeError,
+            "bad frame; call unlockdown from same frame as lockdown");
         return NULL;
     }
 
-    Py_XDECREF(lockdown_frame);
-    lockdown_frame = NULL;
+    Py_CLEAR(lockdown_frame);
     PyThread_release_lock(lockdown_lock);
 
     Py_RETURN_NONE;
